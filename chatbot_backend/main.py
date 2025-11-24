@@ -2,7 +2,8 @@ import os
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
@@ -11,7 +12,16 @@ import torch
 app = FastAPI(
     title="Emotion, Stress & Risk Detection API",
     description="Detect a user's emotional state, stress level, academic stress category, risk level, and overall status.",
-    version="2.5"
+    version="2.6"
+)
+
+# Allow all origins (adjust in production as needed)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Load pretrained model
@@ -25,6 +35,20 @@ print("Model loaded successfully!")
 # Request body
 class TextInput(BaseModel):
     text: str
+
+
+class AnalysisResult(BaseModel):
+    emotion: str
+    stress_level: str
+    academic_stress_category: str
+    risk_level: str
+    overall_status: str
+    bot_response: str
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 
 # -----------------------------------------------------------
@@ -197,39 +221,37 @@ def generate_response(overall_status, emotion, academic_stress, risk):
 # -----------------------------------------------------------
 # MAIN API ENDPOINT
 # -----------------------------------------------------------
-@app.post("/analyze")
+@app.post("/analyze", response_model=AnalysisResult)
 def analyze_text(input: TextInput):
-    text = input.text
+    try:
+        text = input.text.strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="Input text cannot be empty.")
 
-    # Tokenize text
-    inputs = tokenizer(text, return_tensors="pt")
-    outputs = model(**inputs)
+        # Tokenize text & inference (no gradients for speed)
+        with torch.no_grad():
+            inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=256)
+            outputs = model(**inputs)
+            probs = torch.softmax(outputs.logits, dim=1)
+            max_index = torch.argmax(probs).item()
+            emotion = model.config.id2label[max_index]
 
-    # Predict emotion
-    probs = torch.softmax(outputs.logits, dim=1)
-    max_index = torch.argmax(probs).item()
-    emotion = model.config.id2label[max_index]
+        stress = emotion_to_stress(emotion)
+        academic_stress = academic_stress_classifier(text, emotion)
+        risk = risk_detector(text)
+        overall = overall_status_engine(emotion, stress, academic_stress, risk)
+        response = generate_response(overall, emotion, academic_stress, risk)
 
-    # Basic stress
-    stress = emotion_to_stress(emotion)
-
-    # Academic stress
-    academic_stress = academic_stress_classifier(text, emotion)
-
-    # Risk detection
-    risk = risk_detector(text)
-
-    # Final combined status
-    overall = overall_status_engine(emotion, stress, academic_stress, risk)
-    response = generate_response(overall, emotion, academic_stress, risk)
-
-
-
-    return {
-        "emotion": emotion,
-        "stress_level": stress,
-        "academic_stress_category": academic_stress,
-        "risk_level": risk,
-        "overall_status": overall,
-        "bot_response": response
-    }
+        return AnalysisResult(
+            emotion=emotion,
+            stress_level=stress,
+            academic_stress_category=academic_stress,
+            risk_level=risk,
+            overall_status=overall,
+            bot_response=response
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Generic failure
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {e}")
