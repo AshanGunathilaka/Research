@@ -5,6 +5,8 @@ os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import List, Dict, Optional
+import uuid
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 
@@ -219,6 +221,120 @@ def generate_response(overall_status, emotion, academic_stress, risk):
 
 
 # -----------------------------------------------------------
+# THERAPY ENGINE (PERSONALIZED CONVERSATIONS)
+# -----------------------------------------------------------
+def suggest_techniques(emotion: str, academic_stress: str) -> List[str]:
+    techniques: List[str] = []
+    if emotion in ["fear", "surprise"]:
+        techniques.append("5-4-3-2-1 grounding exercise")
+        techniques.append("Box breathing (4-4-4-4)")
+    if emotion in ["sadness"]:
+        techniques.append("Self-compassion check-in: talk to yourself kindly")
+        techniques.append("Behavioral activation: small, doable action")
+    if emotion in ["anger"]:
+        techniques.append("4-7-8 breathing to reduce arousal")
+        techniques.append("Cognitive defusion: name the emotion, not the person")
+    if academic_stress == "burnout":
+        techniques.append("Micro-break: 5 minutes away from screens")
+        techniques.append("Energy audit: identify one drain and one battery")
+    if academic_stress.startswith("academic_stress_"):
+        techniques.append("Task chunking: 25-minute focus + 5-minute rest")
+        techniques.append("Two-minute start: do the smallest possible step")
+    return techniques[:4] if techniques else [
+        "Mindful breathing (3 slow breaths)",
+        "Name and note your feeling"
+    ]
+
+
+def generate_therapeutic_reply(
+    user_text: str,
+    emotion: str,
+    stress: str,
+    academic_stress: str,
+    risk: str,
+    history: List[Dict[str, str]]
+) -> Dict[str, object]:
+    if risk == "high_risk":
+        crisis_msg = (
+            "I’m really sorry you’re feeling this way. Your safety matters. "
+            "If you feel at risk of harming yourself, please contact your local emergency number now. "
+            "You can also reach your country's suicide prevention hotline or a trusted person nearby."
+        )
+        return {
+            "bot_message": crisis_msg,
+            "techniques": [
+                "Call local emergency services",
+                "Contact someone you trust",
+                "Seek immediate professional help"
+            ]
+        }
+
+    # Build a supportive, adaptive message
+    opening = "Thank you for sharing that. "
+    if stress == "high" or academic_stress in ["academic_stress_high", "burnout"]:
+        tone = (
+            "It sounds like a lot is on your plate right now. "
+            "Let’s take this step by step. "
+        )
+    elif stress == "medium":
+        tone = (
+            "I hear that things feel challenging. "
+            "You’re doing your best in a tough moment. "
+        )
+    else:
+        tone = (
+            "I’m here with you. "
+            "Let’s focus on what would help most. "
+        )
+
+    techniques = suggest_techniques(emotion, academic_stress)
+    technique_line = "Would you like to try one of these now: " + ", ".join(techniques) + "?"
+
+    academic_hint = ""
+    if academic_stress.startswith("academic_stress_") or academic_stress == "burnout":
+        academic_hint = (
+            " If this is about studies, we can pick one tiny task, set a 20–25 minute timer, "
+            "and pause for 5 minutes after. I can help you plan it."
+        )
+
+    prompt_followup = (
+        " What feels hardest at this moment, or what would you like us to focus on together?"
+    )
+
+    bot_message = opening + tone + technique_line + academic_hint + prompt_followup
+
+    return {
+        "bot_message": bot_message,
+        "techniques": techniques
+    }
+
+
+# -----------------------------------------------------------
+# SESSION STORE (IN-MEMORY)
+# -----------------------------------------------------------
+Sessions: Dict[str, List[Dict[str, str]]] = {}
+
+
+class ChatStartResponse(BaseModel):
+    session_id: str
+
+
+class ChatMessageInput(BaseModel):
+    session_id: str
+    text: str
+
+
+class ChatMessageResponse(BaseModel):
+    bot_message: str
+    emotion: str
+    stress_level: str
+    academic_stress_category: str
+    risk_level: str
+    overall_status: str
+    techniques: List[str]
+
+
+# -----------------------------------------------------------
 # MAIN API ENDPOINT
 # -----------------------------------------------------------
 @app.post("/analyze", response_model=AnalysisResult)
@@ -255,3 +371,56 @@ def analyze_text(input: TextInput):
     except Exception as e:
         # Generic failure
         raise HTTPException(status_code=500, detail=f"Analysis failed: {e}")
+
+
+@app.post("/chat/start", response_model=ChatStartResponse)
+def chat_start():
+    session_id = str(uuid.uuid4())
+    Sessions[session_id] = []
+    return ChatStartResponse(session_id=session_id)
+
+
+@app.post("/chat/message", response_model=ChatMessageResponse)
+def chat_message(input: ChatMessageInput):
+    try:
+        session_id = input.session_id
+        text = input.text.strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="Input text cannot be empty.")
+        if session_id not in Sessions:
+            raise HTTPException(status_code=404, detail="Session not found. Start a new chat.")
+
+        with torch.no_grad():
+            tokenized = tokenizer(text, return_tensors="pt", truncation=True, max_length=256)
+            outputs = model(**tokenized)
+            probs = torch.softmax(outputs.logits, dim=1)
+            max_index = torch.argmax(probs).item()
+            emotion = model.config.id2label[max_index]
+
+        stress = emotion_to_stress(emotion)
+        academic_stress = academic_stress_classifier(text, emotion)
+        risk = risk_detector(text)
+        overall = overall_status_engine(emotion, stress, academic_stress, risk)
+
+        history = Sessions.get(session_id, [])
+        history.append({"role": "user", "content": text})
+
+        reply = generate_therapeutic_reply(text, emotion, stress, academic_stress, risk, history)
+        bot_message: str = reply.get("bot_message", "I'm here to help.")
+        techniques: List[str] = reply.get("techniques", [])
+        history.append({"role": "assistant", "content": bot_message})
+        Sessions[session_id] = history[-20:]  # keep recent context
+
+        return ChatMessageResponse(
+            bot_message=bot_message,
+            emotion=emotion,
+            stress_level=stress,
+            academic_stress_category=academic_stress,
+            risk_level=risk,
+            overall_status=overall,
+            techniques=techniques,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chat failed: {e}")
