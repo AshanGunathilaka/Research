@@ -10,14 +10,20 @@ import uuid
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from pymongo import MongoClient
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 
-# -----------------------------------------------------------
-# MONGODB ATLAS CONNECTION
-# -----------------------------------------------------------
-MONGO_URI = "mongodb+srv://ashangunathilaka29:1234@cluster0.gq2rdjb.mongodb.net/?retryWrites=true&w=majority"
+# Read MongoDB URI from .env
+MONGO_URI = os.getenv("MONGO_URI")
+
+if not MONGO_URI:
+    raise ValueError("Missing MONGO_URI in .env")
 
 client = MongoClient(MONGO_URI)
+
 db = client["chatbot_db"]
 conversations = db["conversations"]
 
