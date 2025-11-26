@@ -10,26 +10,36 @@ import uuid
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from pymongo import MongoClient
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
-# Load environment variables
-load_dotenv()
+"""Environment setup: load .env robustly and init MongoDB if available."""
+# Try to locate .env anywhere up the tree and load it
+_dotenv_path = find_dotenv()
+if _dotenv_path:
+    load_dotenv(_dotenv_path, override=True)
+else:
+    load_dotenv(override=True)  # fallback to default locations
 
-
-# Read MongoDB URI from .env
 MONGO_URI = os.getenv("MONGO_URI")
 
-if not MONGO_URI:
-    raise ValueError("Missing MONGO_URI in .env")
-
-client = MongoClient(MONGO_URI)
-
-db = client["chatbot_db"]
-conversations = db["conversations"]
+client = None
+conversations = None
+if MONGO_URI:
+    try:
+        client = MongoClient(MONGO_URI)
+        db = client["chatbot_db"]
+        conversations = db["conversations"]
+        print("MongoDB connected.")
+    except Exception as _e:
+        print(f"MongoDB connection failed: {_e}")
+else:
+    print("Warning: MONGO_URI not set. Mongo persistence is disabled.")
 
 
 # Save message into Mongo
 def save_message_to_db(user_id, user_text, analysis):
+    if conversations is None:
+        return  # silently no-op when Mongo not configured
     conversations.insert_one({
         "user_id": user_id,
         "user_text": user_text,
@@ -44,6 +54,8 @@ def save_message_to_db(user_id, user_text, analysis):
 
 # Fetch last N history entries
 def get_user_history(user_id, limit=5):
+    if conversations is None:
+        return []
     return list(
         conversations.find({"user_id": user_id}).sort("_id", -1).limit(limit)
     )
