@@ -1,4 +1,5 @@
 import { Pressable, StyleSheet } from "react-native";
+import { useRouter } from "expo-router";
 
 import { Colors } from "@/constants/theme";
 import { ThemedText } from "@/components/themed-text";
@@ -7,24 +8,30 @@ import { useColorScheme } from "@/hooks/use-color-scheme";
 import { useThemeColor } from "@/hooks/use-theme-color";
 
 export default function HomeScreen() {
+  const router = useRouter();
   const theme = useColorScheme() ?? "light";
   const accent = useThemeColor({}, "tint");
   const buttonLabel = theme === "dark" ? Colors.dark.background : "#fff";
 
   return (
     <ThemedView style={styles.container}>
+      {/* Hero Section */}
       <ThemedView style={styles.heroBlock}>
         <ThemedText type="title" style={styles.heroTitle}>
-          Your AI copilot for everyday questions
+          You don’t have to handle stress alone
         </ThemedText>
+
         <ThemedText style={styles.heroSubtitle}>
-          Connect with the assistant to get answers, brainstorm ideas, or plan
-          your next steps.
+          Talk to an AI companion trained to understand emotions, stress,
+          academic pressure, and difficult moments — in a safe, supportive way.
         </ThemedText>
       </ThemedView>
+
+      {/* CTA Button */}
       <Pressable
         accessibilityRole="button"
-        onPress={() => console.log("Chat with me tapped")}
+        accessibilityLabel="Start chatting with AI stress support"
+        onPress={() => router.push("/chat")}
         style={({ pressed }) => [
           styles.chatButton,
           { backgroundColor: accent, opacity: pressed ? 0.85 : 1 },
@@ -34,9 +41,14 @@ export default function HomeScreen() {
           type="defaultSemiBold"
           style={[styles.chatButtonLabel, { color: buttonLabel }]}
         >
-          Chat with me
+          Start Now
         </ThemedText>
       </Pressable>
+
+      {/* Disclaimer */}
+      <ThemedText style={styles.disclaimer}>
+        This is not a replacement for professional mental health care.
+      </ThemedText>
     </ThemedView>
   );
 }
@@ -47,10 +59,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     justifyContent: "center",
     alignItems: "center",
-    gap: 32,
+    gap: 36,
   },
   heroBlock: {
-    gap: 12,
+    gap: 14,
     maxWidth: 420,
   },
   heroTitle: {
@@ -60,15 +72,22 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontSize: 16,
     lineHeight: 24,
+    opacity: 0.85,
   },
   chatButton: {
     borderRadius: 28,
-    paddingHorizontal: 32,
+    paddingHorizontal: 36,
     paddingVertical: 16,
     minWidth: 220,
     alignItems: "center",
   },
   chatButtonLabel: {
     fontSize: 18,
+  },
+  disclaimer: {
+    fontSize: 12,
+    opacity: 0.6,
+    textAlign: "center",
+    marginTop: 8,
   },
 });
