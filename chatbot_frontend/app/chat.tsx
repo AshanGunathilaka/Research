@@ -16,13 +16,91 @@ import { ThemedView } from "@/components/themed-view";
 import { useThemeColor } from "@/hooks/use-theme-color";
 import { startChatSession, sendChatMessage } from "@/src/services/chatApi";
 
+const TECHNIQUE_DETAILS: Record<string, string> = {
+  "5-4-3-2-1 grounding":
+    "Look around and gently notice: 5 things you can see, 4 you can feel, 3 you can hear, 2 you can smell, and 1 you can taste.",
+  "Box breathing (4-4-4-4)":
+    "Inhale through your nose for 4 seconds, hold for 4, exhale for 4, hold for 4. Repeat this slow rhythm a few times.",
+  "Self-compassion check-in":
+    "Pause and speak to yourself as you would to a kind friend. Acknowledge that what you feel is valid and understandable.",
+  "Small activation task":
+    "Pick one tiny, doable task (like opening your notes or writing a title) to gently move things forward.",
+  "4-7-8 breathing":
+    "Breathe in for 4 seconds, hold for 7, and exhale slowly for 8. This can calm your nervous system.",
+  "Cognitive defusion":
+    "Notice your thoughts as mental events, not facts. You might say: 'I am having the thought that…' instead of 'This is true'.",
+  "5-minute micro-break":
+    "Step away for 5 minutes: stretch, drink water, or look out of a window. Let your body reset a little.",
+  "Energy audit":
+    "Gently scan your day and notice what activities drain you and what restores you. Adjust one small thing in your favour.",
+  "Task chunking (25/5 Pomodoro)":
+    "Work for 25 minutes on a single task, then rest for 5. Repeat a few cycles and keep tasks small and specific.",
+  "Two-minute small start":
+    "Commit to only 2 minutes of a task. Often, starting is the hardest step and momentum will carry you afterwards.",
+  "Mindful breathing":
+    "Bring attention to your breath. Notice the air moving in and out, and gently return your focus when your mind wanders.",
+};
+
+type MessageMeta = {
+  emotion: string;
+  stressLevel: string;
+  academicStress: string;
+  riskLevel: string;
+  overallStatus: string;
+};
+
 type Message = {
   id: string;
   role: "user" | "bot";
   text: string;
   techniques?: string[];
   critical?: boolean;
+  meta?: MessageMeta;
 };
+
+const STATUS_THEME: Record<string, { bg: string; border: string }> = {
+  critical: { bg: "#FEE2E2", border: "#EF4444" },
+  high_stress: { bg: "#FEF3C7", border: "#F59E0B" },
+  moderate_stress: { bg: "#E0F2FE", border: "#38BDF8" },
+  low_stress: { bg: "#DCFCE7", border: "#22C55E" },
+  normal: { bg: "#EEF2FF", border: "#6366F1" },
+  idle: { bg: "#EEF2FF", border: "#CBD5F5" },
+};
+
+function formatOverallStatus(status?: string) {
+  switch (status) {
+    case "critical":
+      return "Critical · Please reach out for real-time help";
+    case "high_stress":
+      return "High stress detected";
+    case "moderate_stress":
+      return "Moderate stress";
+    case "low_stress":
+      return "Low stress";
+    case "normal":
+      return "Stable for now";
+    default:
+      return "Tell me how you're feeling to get a snapshot";
+  }
+}
+
+function formatEmotion(emotion?: string) {
+  if (!emotion) return "Emotion: pending";
+  return `Emotion: ${emotion}`;
+}
+
+function formatStressLevel(level?: string) {
+  if (!level) return "Stress: pending";
+  return `Stress: ${level}`;
+}
+
+function formatRiskLevel(risk?: string) {
+  if (!risk) return "Risk: assessing";
+  if (risk === "safe") return "Risk: safe";
+  if (risk === "moderate_risk") return "Risk: needs care";
+  if (risk === "high_risk") return "Risk: urgent";
+  return `Risk: ${risk}`;
+}
 
 export default function ChatScreen() {
   const router = useRouter();
@@ -40,8 +118,19 @@ export default function ChatScreen() {
   const [isSending, setIsSending] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
 
+  const [selectedTechnique, setSelectedTechnique] = useState<string | null>(
+    null
+  );
+
   const accent = useThemeColor({}, "tint");
   const listRef = useRef<FlatList>(null);
+
+  const lastStatusMeta: MessageMeta | null =
+    [...messages].reverse().find((m) => m.role === "bot" && m.meta)?.meta ??
+    null;
+
+  const statusThemeKey = lastStatusMeta?.overallStatus ?? "idle";
+  const statusTheme = STATUS_THEME[statusThemeKey] ?? STATUS_THEME.idle;
 
   // ---------------- INIT SESSION ----------------
   useEffect(() => {
@@ -91,6 +180,14 @@ export default function ChatScreen() {
     try {
       const response = await sendChatMessage(session, userText);
 
+      const meta: MessageMeta = {
+        emotion: response.emotion,
+        stressLevel: response.stress_level,
+        academicStress: response.academic_stress_category,
+        riskLevel: response.risk_level,
+        overallStatus: response.overall_status,
+      };
+
       setMessages((prev) => [
         ...prev,
         {
@@ -99,6 +196,7 @@ export default function ChatScreen() {
           text: response.bot_message,
           techniques: response.techniques,
           critical: response.overall_status === "critical",
+          meta,
         },
       ]);
     } catch {
@@ -136,6 +234,25 @@ export default function ChatScreen() {
         </ThemedText>
         <ThemedText style={styles.headerSubtitle}>
           You’re safe to talk here
+        </ThemedText>
+      </View>
+
+      <View
+        style={[
+          styles.statusCard,
+          {
+            backgroundColor: statusTheme.bg,
+            borderColor: statusTheme.border,
+          },
+        ]}
+      >
+        <ThemedText style={styles.statusLabel}>
+          {formatOverallStatus(lastStatusMeta?.overallStatus)}
+        </ThemedText>
+        <ThemedText style={styles.statusMeta}>
+          {formatEmotion(lastStatusMeta?.emotion)} ·{" "}
+          {formatStressLevel(lastStatusMeta?.stressLevel)} ·{" "}
+          {formatRiskLevel(lastStatusMeta?.riskLevel)}
         </ThemedText>
       </View>
 
@@ -178,11 +295,15 @@ export default function ChatScreen() {
                   {item.techniques?.length ? (
                     <View style={styles.techniquesRow}>
                       {item.techniques.map((t) => (
-                        <View key={t} style={styles.techChip}>
+                        <Pressable
+                          key={t}
+                          onPress={() => setSelectedTechnique(t)}
+                          style={styles.techChip}
+                        >
                           <ThemedText style={styles.techChipText}>
                             {t}
                           </ThemedText>
-                        </View>
+                        </Pressable>
                       ))}
                     </View>
                   ) : null}
@@ -191,6 +312,18 @@ export default function ChatScreen() {
             );
           }}
         />
+
+        {selectedTechnique && (
+          <View style={styles.techDetailCard}>
+            <ThemedText style={styles.techDetailTitle}>
+              {selectedTechnique}
+            </ThemedText>
+            <ThemedText style={styles.techDetailBody}>
+              {TECHNIQUE_DETAILS[selectedTechnique] ||
+                "This is a grounding or coping technique. You can try it gently and notice how your body responds."}
+            </ThemedText>
+          </View>
+        )}
 
         {/* INPUT */}
         <View style={styles.inputRow}>
@@ -360,5 +493,47 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 15,
     fontWeight: "600",
+  },
+
+  statusCard: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 4,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  statusLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    marginBottom: 2,
+    color: "#0F172A",
+  },
+  statusMeta: {
+    fontSize: 12,
+    color: "#475569",
+  },
+
+  techDetailCard: {
+    marginHorizontal: 16,
+    marginBottom: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 16,
+    backgroundColor: "#F9FAFB",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  techDetailTitle: {
+    fontSize: 13,
+    fontWeight: "600",
+    marginBottom: 4,
+    color: "#0F172A",
+  },
+  techDetailBody: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#4B5563",
   },
 });
