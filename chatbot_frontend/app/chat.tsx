@@ -67,6 +67,8 @@ const STATUS_THEME: Record<string, { bg: string; border: string }> = {
   idle: { bg: "#EEF2FF", border: "#CBD5F5" },
 };
 
+const HISTORY_KEY = "mindplus_chat_history_v1";
+
 function formatOverallStatus(status?: string) {
   switch (status) {
     case "critical":
@@ -102,6 +104,44 @@ function formatRiskLevel(risk?: string) {
   return `Risk: ${risk}`;
 }
 
+function formatAcademicStress(label?: string) {
+  if (!label) return "Study stress: pending";
+
+  if (label === "burnout") return "Study stress: burnout";
+  if (label === "academic_stress_high") return "Study stress: high";
+  if (label === "academic_stress_medium") return "Study stress: medium";
+  if (label === "academic_stress_low") return "Study stress: low";
+
+  return `Study stress: ${label}`;
+}
+
+function loadHistory(): Message[] | null {
+  try {
+    if (typeof globalThis === "undefined") return null;
+    const anyGlobal = globalThis as any;
+    if (!("localStorage" in anyGlobal)) return null;
+    const raw = anyGlobal.localStorage.getItem(HISTORY_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    return parsed as Message[];
+  } catch {
+    return null;
+  }
+}
+
+function saveHistory(messages: Message[]) {
+  try {
+    if (typeof globalThis === "undefined") return;
+    const anyGlobal = globalThis as any;
+    if (!("localStorage" in anyGlobal)) return;
+    const trimmed = messages.slice(-50); // keep last 50 messages
+    anyGlobal.localStorage.setItem(HISTORY_KEY, JSON.stringify(trimmed));
+  } catch {
+    // ignore persistence errors
+  }
+}
+
 export default function ChatScreen() {
   const router = useRouter();
   const { sessionId } = useLocalSearchParams<{ sessionId?: string }>();
@@ -132,8 +172,19 @@ export default function ChatScreen() {
   const statusThemeKey = lastStatusMeta?.overallStatus ?? "idle";
   const statusTheme = STATUS_THEME[statusThemeKey] ?? STATUS_THEME.idle;
 
+  const botMetas = messages
+    .filter((m) => m.role === "bot" && m.meta)
+    .map((m) => m.meta!);
+  const turns = botMetas.length;
+  const currentRisk = lastStatusMeta?.riskLevel ?? "safe";
+
   // ---------------- INIT SESSION ----------------
   useEffect(() => {
+    const stored = loadHistory();
+    if (stored && stored.length) {
+      setMessages(stored);
+    }
+
     async function init() {
       try {
         if (sessionId) {
@@ -162,6 +213,11 @@ export default function ChatScreen() {
   // ---------------- AUTO SCROLL ----------------
   useEffect(() => {
     listRef.current?.scrollToEnd({ animated: true });
+  }, [messages]);
+
+  // ---------------- PERSIST HISTORY ----------------
+  useEffect(() => {
+    saveHistory(messages);
   }, [messages]);
 
   // ---------------- SEND MESSAGE ----------------
@@ -252,6 +308,7 @@ export default function ChatScreen() {
         <ThemedText style={styles.statusMeta}>
           {formatEmotion(lastStatusMeta?.emotion)} ·{" "}
           {formatStressLevel(lastStatusMeta?.stressLevel)} ·{" "}
+          {formatAcademicStress(lastStatusMeta?.academicStress)} ·{" "}
           {formatRiskLevel(lastStatusMeta?.riskLevel)}
         </ThemedText>
       </View>
@@ -312,6 +369,23 @@ export default function ChatScreen() {
             );
           }}
         />
+
+        {/* QUICK PROMPTS */}
+        <View style={styles.promptRow}>
+          {[
+            "I'm overwhelmed with exams",
+            "I can't focus on studying",
+            "I'm scared I'll fail",
+          ].map((prompt) => (
+            <Pressable
+              key={prompt}
+              onPress={() => setInput(prompt)}
+              style={styles.promptChip}
+            >
+              <ThemedText style={styles.promptChipText}>{prompt}</ThemedText>
+            </Pressable>
+          ))}
+        </View>
 
         {selectedTechnique && (
           <View style={styles.techDetailCard}>
@@ -493,6 +567,24 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 15,
     fontWeight: "600",
+  },
+
+  promptRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingBottom: 4,
+  },
+  promptChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: "#E0E7FF",
+  },
+  promptChipText: {
+    fontSize: 11,
+    color: "#3730A3",
   },
 
   statusCard: {
