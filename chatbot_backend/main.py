@@ -140,12 +140,72 @@ def emotion_to_stress(emotion):
 # ACADEMIC STRESS DETECTOR
 # -----------------------------------------------------------
 def academic_stress_classifier(text, emotion):
+    """Heuristic classifier focused on academic / study stress.
+
+    Combines simple keyword spotting with the detected emotion.
+    """
+
     t = text.lower()
 
-    high_k = ["overwhelmed", "can't handle", "hopeless", "panic", "breakdown", "giving up", "end it"]
-    med_k = ["stressed", "pressure", "anxious", "worried", "tired", "frustrated"]
-    burnout_k = ["burnout", "exhausted", "drained", "no energy", "fatigued"]
-    academic_k = ["exam", "exams", "assignment", "assignments", "university", "lectures", "school", "studies"]
+    high_k = [
+        "overwhelmed",
+        "can't handle",
+        "hopeless",
+        "panic",
+        "breakdown",
+        "giving up",
+        "end it",
+        "crisis",
+    ]
+    med_k = [
+        "stressed",
+        "pressure",
+        "anxious",
+        "worried",
+        "tired",
+        "frustrated",
+        "behind",
+        "can't focus",
+        "cant focus",
+        "procrastinating",
+        "procrastination",
+    ]
+    burnout_k = [
+        "burnout",
+        "burnt out",
+        "exhausted",
+        "drained",
+        "no energy",
+        "fatigued",
+        "done with everything",
+    ]
+    academic_k = [
+        "exam",
+        "exams",
+        "midterm",
+        "final",
+        "quiz",
+        "assignment",
+        "assignments",
+        "deadline",
+        "due",
+        "project",
+        "thesis",
+        "dissertation",
+        "university",
+        "college",
+        "school",
+        "lectures",
+        "lecture",
+        "coursework",
+        "gpa",
+        "grades",
+        "mark",
+        "marks",
+        "study",
+        "studies",
+        "studying",
+    ]
 
     if any(w in t for w in high_k):
         return "academic_stress_high"
@@ -238,7 +298,13 @@ def generate_response(overall_status, emotion, academic_stress, risk):
 # THERAPEUTIC TECHNIQUES
 # -----------------------------------------------------------
 def suggest_techniques(emotion, academic_stress):
-    techniques = []
+    """Return a small set of concrete coping techniques.
+
+    The names are interpreted on the frontend, where more detailed
+    instructions can be shown.
+    """
+
+    techniques: List[str] = []
 
     if emotion in ["fear", "surprise"]:
         techniques += ["5-4-3-2-1 grounding", "Box breathing (4-4-4-4)"]
@@ -255,39 +321,229 @@ def suggest_techniques(emotion, academic_stress):
     if academic_stress.startswith("academic_stress_"):
         techniques += ["Task chunking (25/5 Pomodoro)", "Two-minute small start"]
 
-    return techniques[:4] if techniques else ["Mindful breathing"]
+    # Fallback general tools
+    if not techniques:
+        techniques = ["Mindful breathing"]
+
+    # Keep list short and unique
+    deduped: List[str] = []
+    for t in techniques:
+        if t not in deduped:
+            deduped.append(t)
+
+    return deduped[:4]
 
 
 # -----------------------------------------------------------
 # THERAPEUTIC REPLY (SESSION MODE)
 # -----------------------------------------------------------
-def generate_therapeutic_reply(text, emotion, stress, academic_stress, risk):
+def _classify_theme_from_history(history: List[Dict[str, str]], latest_text: str) -> str:
+    """Roughly classify what the user is talking about (studies, relationships, life)."""
+
+    combined = " ".join(m.get("message", "") for m in history if m.get("role") == "user")
+    combined += " " + latest_text
+    t = combined.lower()
+
+    academic_terms = [
+        "exam",
+        "assignment",
+        "lecture",
+        "school",
+        "university",
+        "college",
+        "gpa",
+        "grade",
+        "project",
+        "thesis",
+        "study",
+        "studying",
+    ]
+    relationship_terms = [
+        "friend",
+        "friends",
+        "relationship",
+        "partner",
+        "boyfriend",
+        "girlfriend",
+        "family",
+        "parents",
+        "mom",
+        "dad",
+    ]
+    work_terms = ["job", "work", "shift", "boss", "office"]
+
+    if any(w in t for w in academic_terms):
+        return "studies"
+    if any(w in t for w in relationship_terms):
+        return "relationships"
+    if any(w in t for w in work_terms):
+        return "work"
+    return "general"
+
+
+def _build_reflection_sentence(text: str, emotion: str, academic_stress: str, theme: str) -> str:
+    base = "Thank you for trusting me with this. "
+
+    if theme == "studies":
+        context = "It sounds like your studies and academic workload are really weighing on you. "
+    elif theme == "relationships":
+        context = "It sounds like the people around you and your relationships are on your mind a lot. "
+    elif theme == "work":
+        context = "It sounds like work and responsibilities are feeling heavy right now. "
+    else:
+        context = "It sounds like a lot is happening inside your head and heart. "
+
+    if academic_stress == "burnout":
+        stress_line = "Feeling burnt out is a sign you've been carrying too much for too long. "
+    elif academic_stress == "academic_stress_high":
+        stress_line = "This level of pressure would be intense for anyone in your position. "
+    elif academic_stress == "academic_stress_medium":
+        stress_line = "It's understandable that you're feeling stressed about this. "
+    else:
+        stress_line = "Even when stress is lower, your feelings still matter. "
+
+    if emotion in ["sadness", "fear"]:
+        emotion_line = "It's okay to feel this way, and you're not weak for feeling it. "
+    elif emotion in ["anger"]:
+        emotion_line = "Feeling angry can be a sign that something important to you feels threatened or unfair. "
+    else:
+        emotion_line = "Whatever you're feeling right now is valid. "
+
+    return base + context + stress_line + emotion_line
+
+
+def _build_followup_question(turns: int, risk: str, academic_stress: str) -> str:
+    if risk == "high_risk":
+        return (
+            " If you can, please also consider telling a trusted person how you feel, "
+            "or reaching out to a professional or emergency service in your area."
+        )
+
+    if turns <= 1:
+        return " What part of this feels the heaviest right now?"
+
+    if academic_stress in ("academic_stress_high", "burnout"):
+        return " Of everything you've shared, which study-related pressure feels most urgent to ease, even a little?"
+
+    return " What is one small change that, if it happened, would make this even slightly easier to carry?"
+
+
+def _detect_cbt_pattern(text: str) -> str | None:
+    """Very simple CBT-style helper.
+
+    Looks for common thinking patterns and returns a gentle
+    reframe if something is detected. This is *not* a
+    clinical tool, just a conversational aid.
+    """
+
+    t = text.lower()
+
+    all_or_nothing = ["always", "never", "completely fail", "ruined everything"]
+    catastrophizing = ["disaster", "ruined", "no way out", "everything will go wrong"]
+    mind_reading = ["everyone thinks", "they all think", "people will think"]
+    self_criticism = ["i'm useless", "i am useless", "i'm stupid", "i am stupid", "i'm a failure", "i am a failure"]
+
+    if any(p in t for p in self_criticism):
+        return (
+            "I also notice some very harsh thoughts about yourself. In CBT we might gently question "
+            "those thoughts and ask: if a close friend were in your situation, would you judge them as harshly? "
+        )
+
+    if any(p in t for p in all_or_nothing):
+        return (
+            "It sounds like your mind is pulling things into all-or-nothing terms. A small CBT step is to look for "
+            "examples that don't fully fit the 'always/never' story, even if they feel small. "
+        )
+
+    if any(p in t for p in catastrophizing):
+        return (
+            "Some of what you wrote sounds like your mind is jumping to the worst-case scenario. "
+            "A CBT-style question here is: what is the most realistic outcome, and what evidence supports it? "
+        )
+
+    if any(p in t for p in mind_reading):
+        return (
+            "You mentioned worrying about what others think. In CBT this is sometimes called 'mind-reading'— "
+            "assuming we know others' thoughts without clear evidence. It can help to pause and ask what you actually know for sure. "
+        )
+
+    return None
+
+
+def generate_therapeutic_reply(
+    text: str,
+    emotion: str,
+    stress: str,
+    academic_stress: str,
+    risk: str,
+    history: List[Dict[str, str]],
+):
+    """Generate a supportive, stress-focused reply using simple rules.
+
+    This function is intentionally conservative: it offers validation,
+    coping strategies and gentle reflection, and defers to real-world
+    help for any high-risk situations.
+    """
+
+    # High-risk: prioritise safety messaging and do not try to "fix" things
     if risk == "high_risk":
         return {
             "bot_message": (
-                "I’m really sorry you're feeling this way. Your safety matters. "
-                "If you feel like you may harm yourself, please contact your emergency number right now."
+                "I'm really glad you shared this with me. Your safety matters more than anything. "
+                "I'm an AI and I can't provide emergency help, but I care about your wellbeing. "
+                "If you feel like you might harm yourself or are in immediate danger, please contact "
+                "emergency services or a crisis hotline in your country right now. "
+                "You don't have to face this alone."
             ),
-            "techniques": ["Call emergency services", "Contact someone you trust"]
+            "techniques": [
+                "Call emergency services",
+                "Contact someone you trust",
+            ],
         }
 
-    opening = "Thank you for sharing. "
+    turns = sum(1 for m in history if m.get("role") == "user")
+    theme = _classify_theme_from_history(history, text)
+
+    # ChatGPT-like greeting on the very first turn
+    greeting = ""
+    if turns == 0:
+        greeting = (
+            "Hi, I'm MindPlus, an AI companion focused on stress, emotions, and academic pressure. "
+            "I can't replace a human professional, but I can help you explore what you're feeling and suggest coping ideas. "
+        )
+
+    reflection = _build_reflection_sentence(text, emotion, academic_stress, theme)
+
     if stress == "high" or academic_stress in ["academic_stress_high", "burnout"]:
-        tone = "It sounds like you're under a lot of pressure. "
+        tone = "Right now your nervous system is trying to cope with a lot. "
     elif stress == "medium":
-        tone = "I can hear that things feel challenging. "
+        tone = "Your reaction makes sense given what you're dealing with. "
     else:
-        tone = "I'm here with you. "
+        tone = "Even if things seem okay from the outside, it's valid to want support. "
+
+    # Simple CBT-style line (optional)
+    cbt_line = _detect_cbt_pattern(text) or ""
+
+    # Academic-ready short explanation of the classification
+    overall = overall_status_engine(emotion, stress, academic_stress, risk)
+    academic_expl = (
+        "From a stress-screening point of view, this looks like "
+        f"'{overall}' overall with '{academic_stress}' related to your studies. "
+        "This is just an automated approximation, not a diagnosis. "
+    )
 
     techniques = suggest_techniques(emotion, academic_stress)
-    technique_line = "You might find these techniques helpful: " + ", ".join(techniques) + "."
+    technique_line = (
+        "Here are a couple of gentle things you could try: "
+        + ", ".join(techniques)
+        + ". "
+    )
 
-    followup = " What feels hardest right now?"
+    followup = _build_followup_question(turns, risk, academic_stress)
 
-    return {
-        "bot_message": opening + tone + technique_line + followup,
-        "techniques": techniques
-    }
+    bot_message = greeting + reflection + tone + academic_expl + cbt_line + technique_line + followup
+
+    return {"bot_message": bot_message, "techniques": techniques}
 
 
 # -----------------------------------------------------------
@@ -382,7 +638,8 @@ def chat_message(input: ChatMessageInput):
         risk = risk_detector(text)
         overall = overall_status_engine(emotion, stress, academic_stress, risk)
 
-        reply = generate_therapeutic_reply(text, emotion, stress, academic_stress, risk)
+        history = Sessions.get(session_id, [])
+        reply = generate_therapeutic_reply(text, emotion, stress, academic_stress, risk, history)
         bot_message = reply["bot_message"]
         techniques = reply["techniques"]
 
