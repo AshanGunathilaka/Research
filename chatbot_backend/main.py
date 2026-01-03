@@ -9,56 +9,6 @@ from typing import List, Dict
 import uuid
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from pymongo import MongoClient
-from dotenv import load_dotenv, find_dotenv
-
-"""Environment setup: load .env robustly and init MongoDB if available."""
-# Try to locate .env anywhere up the tree and load it
-_dotenv_path = find_dotenv()
-if _dotenv_path:
-    load_dotenv(_dotenv_path, override=True)
-else:
-    load_dotenv(override=True)  # fallback to default locations
-
-MONGO_URI = os.getenv("MONGO_URI")
-
-client = None
-conversations = None
-if MONGO_URI:
-    try:
-        client = MongoClient(MONGO_URI)
-        db = client["chatbot_db"]
-        conversations = db["conversations"]
-        print("MongoDB connected.")
-    except Exception as _e:
-        print(f"MongoDB connection failed: {_e}")
-else:
-    print("Warning: MONGO_URI not set. Mongo persistence is disabled.")
-
-
-# Save message into Mongo
-def save_message_to_db(user_id, user_text, analysis):
-    if conversations is None:
-        return  # silently no-op when Mongo not configured
-    conversations.insert_one({
-        "user_id": user_id,
-        "user_text": user_text,
-        "emotion": analysis["emotion"],
-        "stress_level": analysis["stress_level"],
-        "academic_stress_category": analysis["academic_stress_category"],
-        "risk_level": analysis["risk_level"],
-        "overall_status": analysis["overall_status"],
-        "bot_response": analysis["bot_response"]
-    })
-
-
-# Fetch last N history entries
-def get_user_history(user_id, limit=5):
-    if conversations is None:
-        return []
-    return list(
-        conversations.find({"user_id": user_id}).sort("_id", -1).limit(limit)
-    )
 
 
 # -----------------------------------------------------------
@@ -593,9 +543,6 @@ def analyze_text(input: TextInput):
             "overall_status": overall,
             "bot_response": bot_response
         }
-
-        save_message_to_db(user_id, text, analysis)
-
         return analysis
 
     except Exception as e:
